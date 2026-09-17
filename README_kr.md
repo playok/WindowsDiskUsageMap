@@ -4,6 +4,22 @@
 
 Rust + egui/eframe 기반 Windows 디스크 공간 분석기입니다. 폴더 크기를 계층형 트리맵으로 표시하고 오래된 대용량 디렉터리를 찾습니다. 파일 삭제 기능은 없습니다.
 
+## 태그 기반 자동 배포 (x64 / ARM64)
+
+`Cargo.toml` 버전과 일치하는 태그를 푸시하면 GitHub Release가 자동 배포됩니다.
+
+```powershell
+git tag -a v1.0.0 -m "버전 1.0.0 배포"
+git push origin main
+git push origin v1.0.0
+```
+
+`Windows release` 워크플로가 Windows x64·ARM64 러너에서 각각 빌드·테스트하며, 둘 다 성공하면 공개합니다. 첨부 파일은 `diskusagemap-v<버전>-windows-x64.zip`, `diskusagemap-v<버전>-windows-arm64.zip`, `SHA256SUMS.txt`입니다. ZIP에는 실행 파일과 한·영 README가 들어 있으며 MSVC 런타임은 정적으로 링크합니다. Windows 아키텍처에 맞는 ZIP을 선택하세요.
+
+`v1.1.0-rc.1` 같은 태그도 패키지 버전과 일치해야 하며 사전 배포로 게시됩니다. 이미 공개한 릴리스는 덮어쓰지 않습니다. 업로드 실패 시 초안으로 남고 재실행할 수 있습니다. 별도 시크릿 없이 배포 작업의 `GITHUB_TOKEN`에 `contents: write` 권한을 사용합니다.
+
+배포 없이 검증하려면 **Actions → Windows release → Run workflow**에서 `main`을 선택하세요. ZIP은 아티팩트로 14일간 보관합니다. 버전 태그에서 수동 실행하면 배포합니다. 다음 버전은 `Cargo.toml` 수정과 `Cargo.lock` 갱신을 커밋한 뒤 해당 커밋에 태그를 붙이세요.
+
 ## 언어 선택
 
 화면 상단의 **Language / 언어**에서 **한국어** 또는 **English**를 선택하면 즉시 전환됩니다. 기본 언어는 한국어이며, 선택한 언어는 `%LOCALAPPDATA%\DiskUsageMap\language.txt`에 저장하여 다음 실행에도 적용합니다. 재시작이나 재스캔은 필요하지 않습니다.

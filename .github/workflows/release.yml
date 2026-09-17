@@ -1,0 +1,141 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            machine: 34404
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            machine: 43620
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      BUILD_TARGET: ${{ matrix.target }}
+      BUILD_ARCH: ${{ matrix.arch }}
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add --toolchain stable $env:BUILD_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate version
+        id: version
+        run: |
+          $metadata = cargo +stable metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = ($metadata.packages | Where-Object name -eq 'diskusagemap').version
+          if (-not $version) { throw 'Package version not found' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag must match Cargo.toml: v$version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Check formatting and lint
+        run: |
+          cargo +stable fmt --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable clippy --locked --all-targets --target $env:BUILD_TARGET -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test
+        run: cargo +stable test --locked --target $env:BUILD_TARGET
+      - name: Build release
+        run: cargo +stable build --locked --release --target $env:BUILD_TARGET
+      - name: Check executable architecture and run scan smoke test
+        run: |
+          $exe = "target/$env:BUILD_TARGET/release/diskusagemap.exe"
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path $exe))
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([BitConverter]::ToUInt32($bytes, $peOffset) -ne 0x4550) { throw 'Invalid PE signature' }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne [int]$env:EXPECTED_MACHINE) { throw "Incorrect executable architecture: $machine" }
+          $process = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList '--scan-check', 'src' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Scan smoke test failed: $($process.ExitCode)" }
+      - name: Package
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $name = "diskusagemap-v$env:APP_VERSION-windows-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Path "package/$name", dist -Force | Out-Null
+          Copy-Item "target/$env:BUILD_TARGET/release/diskusagemap.exe" "package/$name/"
+          Copy-Item README.md, README_kr.md "package/$name/"
+          Compress-Archive -Path "package/$name/*" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name.zip" | Set-Content "dist/$name.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: windows-*
+          path: dist
+          merge-multiple: true
+      - name: Verify and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          test "$(find . -maxdepth 1 -name '*.zip' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.sha256' | wc -l)" -eq 2
+          sha256sum --check ./*.sha256
+          cat ./*.sha256 > SHA256SUMS.txt
+          if gh release view "$RELEASE_TAG" --json isDraft > release.json; then
+            if [ "$(jq -r .isDraft release.json)" != true ]; then
+              echo 'Release is already published; existing assets are preserved.'
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "Disk Usage Map $RELEASE_TAG"
+          fi
+          gh release upload "$RELEASE_TAG" ./*.zip SHA256SUMS.txt --clobber
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+          fi

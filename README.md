@@ -19,6 +19,22 @@ cargo run --release -- --demo
 
 The executable is `target/release/diskusagemap.exe`. Choose a drive or enter a folder path, then click **Start scan**. Use **Refresh drives** after connecting a removable drive.
 
+## Automated releases (x64 / ARM64)
+
+Push a version tag matching `Cargo.toml` to publish a GitHub Release:
+
+```powershell
+git tag -a v1.0.0 -m "버전 1.0.0 배포"
+git push origin main
+git push origin v1.0.0
+```
+
+The `Windows release` workflow builds and tests on native Windows x64 and ARM64 runners. Both must succeed before publication. Releases contain `diskusagemap-v<VERSION>-windows-x64.zip`, `diskusagemap-v<VERSION>-windows-arm64.zip`, and `SHA256SUMS.txt`. Each ZIP includes the executable and both READMEs; the MSVC runtime is linked statically. Choose the archive matching your Windows architecture.
+
+Prerelease tags such as `v1.1.0-rc.1` must also match the package version. Published releases are not overwritten. Failed uploads leave a draft that can be retried. No additional secret is needed: publishing uses `GITHUB_TOKEN` with `contents: write`.
+
+For verification without publishing, run **Actions → Windows release → Run workflow** on `main`. ZIPs remain as workflow artifacts for 14 days. Manual runs on version tags publish releases. For the next release, update `Cargo.toml`, regenerate `Cargo.lock`, commit, and tag that commit.
+
 ## Language
 
 Choose **한국어** or **English** in the **Language / 언어** selector at the top of the window. Changes apply immediately without restarting or rescanning. Korean is the default; your selection is stored in `%LOCALAPPDATA%\DiskUsageMap\language.txt` and restored on the next launch.
